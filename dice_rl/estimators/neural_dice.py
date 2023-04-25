@@ -18,10 +18,12 @@ from __future__ import print_function
 
 import numpy as np
 import tensorflow.compat.v2 as tf
+
 from tf_agents.specs import tensor_spec
 from tf_agents.policies import tf_policy
 from tf_agents.utils import common as tfagents_common
 from typing import Any, Callable, Iterable, Optional, Sequence, Tuple, Union
+from wandb.wandb_run import Run
 
 import dice_rl.data.dataset as dataset_lib
 import dice_rl.utils.common as common_lib
@@ -270,13 +272,16 @@ class NeuralDice(object):
     return (tf.reduce_mean(nu_loss), tf.reduce_mean(zeta_loss),
             tf.reduce_mean(lam_loss))
 
-  def estimate_average_reward(self, dataset: dataset_lib.OffpolicyDataset,
-                              target_policy: tf_policy.TFPolicy):
+  def estimate_average_reward(self,
+                              dataset: dataset_lib.OffpolicyDataset,
+                              target_policy: tf_policy.TFPolicy,
+                              wandb_run: Run):
     """Estimates value (average per-step reward) of policy.
 
     Args:
       dataset: The dataset to sample experience from.
       target_policy: The policy whose value we want to estimate.
+      wandb_run: `wandb.wandb_run.Run` object for logging.
 
     Returns:
       Estimated average per-step reward of the target policy.
@@ -339,6 +344,17 @@ class NeuralDice(object):
              self._primal_regularizer * f_nu, 'dreg =',
              self._dual_regularizer * f_zeta, 'lagrangian =', lagrangian,
              'overall =', overall)
+
+    wandb_run.log({
+      "nu_zero": nu_zero,
+      "lam": self._norm_regularizer * self._lam,
+      "dual_step": dual_step,
+      "constraint": constraint,
+      "nu_reg": self._primal_regularizer * f_nu,
+      "zeta_reg": self._dual_regularizer * f_zeta,
+      "lagrangian": lagrangian,
+      "overall": overall
+    })
 
     return dual_step
 

@@ -25,9 +25,11 @@ import sys
 import tensorflow.compat.v2 as tf
 tf.compat.v1.enable_v2_behavior()
 import pickle
+import wandb
 
 from tf_agents.environments import gym_wrapper
-from tf_agents.environments import tf_py_environment
+from tf_agents.environments import suite_mujoco, tf_py_environment
+from tf_agents.policies.actor_policy import ActorPolicy
 
 from dice_rl.environments.env_policies import get_target_policy
 import dice_rl.environments.gridworld.navigation as navigation
@@ -39,6 +41,8 @@ from dice_rl.networks.value_network import ValueNetwork
 import dice_rl.utils.common as common_utils
 from dice_rl.data.dataset import Dataset, EnvStep, StepType
 from dice_rl.data.tf_offpolicy_dataset import TFOffpolicyDataset
+
+from dice_rl.networks.torch_actor_network import TorchActorNetwork
 
 
 FLAGS = flags.FLAGS
@@ -81,6 +85,35 @@ flags.DEFINE_string(
     'transform_reward', None, 'Non-linear reward transformation'
     'One of [exp, cuberoot, None]')
 
+flags.DEFINE_string("algo_name", "NeuralDICE", "Algorithm name.")
+
+
+def get_target_policy_from_torch(load_dir, env_name):
+  """
+  Load target policy.
+  """
+  env = suite_mujoco.load(env_name)
+  env = tf_py_environment.TFPyEnvironment(env)
+
+  actor_net = TorchActorNetwork(
+    input_tensor_spec   = env.observation_spec(),
+    output_tensor_spec  = env.action_spec(),
+    fc_layer_params     = (256, 256)
+  )
+
+  ## need to build actor_net first by constructing ActorPolicy
+  policy = ActorPolicy(
+    time_step_spec  = env.time_step_spec(),
+    action_spec     = env.action_spec(),
+    actor_network   = actor_net,
+    training        = False
+  )
+
+  ## policy keeps reference to actor_net, so it automatically updates
+  actor_net.load_torch_weights(load_dir)
+  return policy
+
+
 
 def main(argv):
   load_dir = FLAGS.load_dir
@@ -111,6 +144,43 @@ def main(argv):
   scale_reward = FLAGS.scale_reward
   shift_reward = FLAGS.shift_reward
   transform_reward = FLAGS.transform_reward
+
+  ## wandb config
+  os.environ["WANDB_API_KEY"] = "347cf7dc2e58b4eed9a6211c618daff1ba02cdfa"
+
+  run = wandb.init(
+    mode    = "online",
+    entity  = "kernel_metric",
+    project = "ope_baselines",
+    group   = "neural_dice",
+    dir     = "/ext_hdd/twguntara/kernel_ope/wandb",
+    config  = {
+      "seed": seed,
+      "env_name": env_name,
+      "tabular_obs": tabular_obs,
+      "num_trajectory": num_trajectory,
+      "max_trajectory_length": max_trajectory_length,
+      "alpha": alpha,
+      "gamma": gamma,
+      "nu_learning_rate": nu_learning_rate,
+      "zeta_learning_rate": zeta_learning_rate,
+      "nu_regularizer": nu_regularizer,
+      "zeta_regularizer": zeta_regularizer,
+      "num_steps": num_steps,
+      "batch_size": batch_size,
+      "f_exponent": f_exponent,
+      "primal_form": primal_form,
+      "primal_regularizer": primal_regularizer,
+      "dual_regularizer": dual_regularizer,
+      "zero_reward": zero_reward,
+      "norm_regularizer": norm_regularizer,
+      "zeta_pos": zeta_pos,
+      "scale_reward": scale_reward,
+      "shift_reward": shift_reward,
+      "transform_reward": transform_reward,
+      "algo_name": FLAGS.algo_name
+    }
+  )
 
   def reward_fn(env_step):
     reward = env_step.reward * scale_reward + shift_reward
@@ -157,7 +227,9 @@ def main(argv):
 
   directory = os.path.join(load_dir, hparam_str)
   print('Loading dataset from', directory)
-  dataset = Dataset.load(directory)
+  dataset = Dataset.load(
+    directory.replace("seed{}".format(seed), "seed0")
+  )
   all_steps = dataset.get_all_steps()
   max_reward = tf.reduce_max(all_steps.reward)
   min_reward = tf.reduce_min(all_steps.reward)
@@ -169,7 +241,8 @@ def main(argv):
   print('behavior per-step',
         estimator_lib.get_fullbatch_average(dataset, gamma=gamma))
   target_dataset = Dataset.load(
-      directory.replace('alpha{}'.format(alpha), 'alpha1.0'))
+    directory.replace('alpha{}'.format(alpha), 'alpha1.0').replace("seed{}".format(seed), "seed0")
+  )
   print('target per-step',
         estimator_lib.get_fullbatch_average(target_dataset, gamma=1.))
 
@@ -217,7 +290,8 @@ def main(argv):
   global_step = tf.Variable(0, dtype=tf.int64)
   tf.summary.experimental.set_step(global_step)
 
-  target_policy = get_target_policy(load_dir, env_name, tabular_obs)
+  # target_policy = get_target_policy(load_dir, env_name, tabular_obs)
+  target_policy = get_target_policy_from_torch(load_dir, env_name)
   running_losses = []
   running_estimates = []
   for step in range(num_steps):
@@ -230,7 +304,7 @@ def main(argv):
                                   target_policy)
     running_losses.append(losses)
     if step % 500 == 0 or step == num_steps - 1:
-      estimate = estimator.estimate_average_reward(dataset, target_policy)
+      estimate = estimator.estimate_average_reward(dataset, target_policy, run)
       running_estimates.append(estimate)
       running_losses = []
     global_step.assign_add(1)
