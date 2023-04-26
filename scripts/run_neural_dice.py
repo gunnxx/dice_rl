@@ -19,35 +19,26 @@ from __future__ import print_function
 from absl import app
 from absl import flags
 
-import numpy as np
 import os
-import sys
-import tensorflow.compat.v2 as tf
-tf.compat.v1.enable_v2_behavior()
-import pickle
+import d4rl ## needed for maze2d envs
+import tensorflow as tf
 import wandb
 
-from tf_agents.environments import gym_wrapper
 from tf_agents.environments import suite_mujoco, tf_py_environment
 from tf_agents.policies.actor_policy import ActorPolicy
 
-from dice_rl.environments.env_policies import get_target_policy
-import dice_rl.environments.gridworld.navigation as navigation
-import dice_rl.environments.gridworld.tree as tree
-import dice_rl.environments.gridworld.taxi as taxi
 from dice_rl.estimators.neural_dice import NeuralDice
 from dice_rl.estimators import estimator as estimator_lib
 from dice_rl.networks.value_network import ValueNetwork
-import dice_rl.utils.common as common_utils
-from dice_rl.data.dataset import Dataset, EnvStep, StepType
-from dice_rl.data.tf_offpolicy_dataset import TFOffpolicyDataset
+from dice_rl.data.dataset import Dataset
 
 from dice_rl.networks.torch_actor_network import TorchActorNetwork
 
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_string('load_dir', None, 'Directory to load dataset from.')
+flags.DEFINE_string('buffer_filepath', None, 'Directory to load dataset from.')
+flags.DEFINE_string('policy_filepath', None, 'Directory to load policy from')
 flags.DEFINE_string('save_dir', None,
                     'Directory to save the model and estimation results.')
 flags.DEFINE_string('env_name', 'grid', 'Environment name.')
@@ -85,7 +76,7 @@ flags.DEFINE_string(
     'transform_reward', None, 'Non-linear reward transformation'
     'One of [exp, cuberoot, None]')
 
-flags.DEFINE_string("algo_name", "NeuralDICE", "Algorithm name.")
+flags.DEFINE_string("algo_name", None, "Algorithm name.", required=True)
 
 
 def get_target_policy_from_torch(load_dir, env_name):
@@ -114,16 +105,17 @@ def get_target_policy_from_torch(load_dir, env_name):
   return policy
 
 
-
 def main(argv):
-  load_dir = FLAGS.load_dir
+  ## GPU is problematic for current installation of TF on storm servers
+  ## but somehow converting dataset can use GPU...
+  os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+  buffer_filepath = FLAGS.buffer_filepath
+  policy_filepath = FLAGS.policy_filepath
   save_dir = FLAGS.save_dir
   env_name = FLAGS.env_name
+  algo_name = FLAGS.algo_name
   seed = FLAGS.seed
-  tabular_obs = FLAGS.tabular_obs
-  num_trajectory = FLAGS.num_trajectory
-  max_trajectory_length = FLAGS.max_trajectory_length
-  alpha = FLAGS.alpha
   gamma = FLAGS.gamma
   nu_learning_rate = FLAGS.nu_learning_rate
   zeta_learning_rate = FLAGS.zeta_learning_rate
@@ -145,41 +137,41 @@ def main(argv):
   shift_reward = FLAGS.shift_reward
   transform_reward = FLAGS.transform_reward
 
+  ## seeding
+  tf.random.set_seed(seed)
+
   ## wandb config
   os.environ["WANDB_API_KEY"] = "347cf7dc2e58b4eed9a6211c618daff1ba02cdfa"
 
+  wandb_config = {
+    "seed": seed,
+    "env_name": env_name,
+    "gamma": gamma,
+    "nu_learning_rate": nu_learning_rate,
+    "zeta_learning_rate": zeta_learning_rate,
+    "nu_regularizer": nu_regularizer,
+    "zeta_regularizer": zeta_regularizer,
+    "num_steps": num_steps,
+    "batch_size": batch_size,
+    "f_exponent": f_exponent,
+    "primal_form": primal_form,
+    "primal_regularizer": primal_regularizer,
+    "dual_regularizer": dual_regularizer,
+    "zero_reward": zero_reward,
+    "norm_regularizer": norm_regularizer,
+    "zeta_pos": zeta_pos,
+    "scale_reward": scale_reward,
+    "shift_reward": shift_reward,
+    "transform_reward": transform_reward
+  }
   run = wandb.init(
     mode    = "online",
     entity  = "kernel_metric",
     project = "ope_baselines",
-    group   = "neural_dice",
-    dir     = "/ext_hdd/twguntara/kernel_ope/wandb",
-    config  = {
-      "seed": seed,
-      "env_name": env_name,
-      "tabular_obs": tabular_obs,
-      "num_trajectory": num_trajectory,
-      "max_trajectory_length": max_trajectory_length,
-      "alpha": alpha,
-      "gamma": gamma,
-      "nu_learning_rate": nu_learning_rate,
-      "zeta_learning_rate": zeta_learning_rate,
-      "nu_regularizer": nu_regularizer,
-      "zeta_regularizer": zeta_regularizer,
-      "num_steps": num_steps,
-      "batch_size": batch_size,
-      "f_exponent": f_exponent,
-      "primal_form": primal_form,
-      "primal_regularizer": primal_regularizer,
-      "dual_regularizer": dual_regularizer,
-      "zero_reward": zero_reward,
-      "norm_regularizer": norm_regularizer,
-      "zeta_pos": zeta_pos,
-      "scale_reward": scale_reward,
-      "shift_reward": shift_reward,
-      "transform_reward": transform_reward,
-      "algo_name": FLAGS.algo_name
-    }
+    group   = algo_name,
+    dir     = save_dir,
+    config  = wandb_config,
+    id      = "%s_%s_seed-%s_algo-%.3f" % (env_name, algo_name, seed, gamma)
   )
 
   def reward_fn(env_step):
@@ -194,42 +186,15 @@ def main(argv):
       raise ValueError('Reward {} not implemented.'.format(transform_reward))
     return reward
 
-  hparam_str = ('{ENV_NAME}_tabular{TAB}_alpha{ALPHA}_seed{SEED}_'
-                'numtraj{NUM_TRAJ}_maxtraj{MAX_TRAJ}').format(
-                    ENV_NAME=env_name,
-                    TAB=tabular_obs,
-                    ALPHA=alpha,
-                    SEED=seed,
-                    NUM_TRAJ=num_trajectory,
-                    MAX_TRAJ=max_trajectory_length)
-  train_hparam_str = (
-      'nlr{NLR}_zlr{ZLR}_zeror{ZEROR}_preg{PREG}_dreg{DREG}_nreg{NREG}_'
-      'pform{PFORM}_fexp{FEXP}_zpos{ZPOS}_'
-      'scaler{SCALER}_shiftr{SHIFTR}_transr{TRANSR}').format(
-          NLR=nu_learning_rate,
-          ZLR=zeta_learning_rate,
-          ZEROR=zero_reward,
-          PREG=primal_regularizer,
-          DREG=dual_regularizer,
-          NREG=norm_regularizer,
-          PFORM=primal_form,
-          FEXP=f_exponent,
-          ZPOS=zeta_pos,
-          SCALER=scale_reward,
-          SHIFTR=shift_reward,
-          TRANSR=transform_reward)
   if save_dir is not None:
-    save_dir = os.path.join(save_dir, hparam_str, train_hparam_str)
+    save_dir = os.path.join(save_dir, env_name, algo_name, "seed-%d_gamma-%.3f" % (seed, gamma))
     summary_writer = tf.summary.create_file_writer(logdir=save_dir)
     summary_writer.set_as_default()
   else:
     tf.summary.create_noop_writer()
 
-  directory = os.path.join(load_dir, hparam_str)
-  print('Loading dataset from', directory)
-  dataset = Dataset.load(
-    directory.replace("seed{}".format(seed), "seed0")
-  )
+  print('Loading dataset from', buffer_filepath)
+  dataset = Dataset.load(buffer_filepath)
   all_steps = dataset.get_all_steps()
   max_reward = tf.reduce_max(all_steps.reward)
   min_reward = tf.reduce_min(all_steps.reward)
@@ -240,11 +205,6 @@ def main(argv):
   print('min reward', min_reward, 'max reward', max_reward)
   print('behavior per-step',
         estimator_lib.get_fullbatch_average(dataset, gamma=gamma))
-  target_dataset = Dataset.load(
-    directory.replace('alpha{}'.format(alpha), 'alpha1.0').replace("seed{}".format(seed), "seed0")
-  )
-  print('target per-step',
-        estimator_lib.get_fullbatch_average(target_dataset, gamma=1.))
 
   activation_fn = tf.nn.relu
   kernel_initializer = tf.keras.initializers.GlorotUniform()
@@ -270,28 +230,28 @@ def main(argv):
   lam_optimizer = tf.keras.optimizers.Adam(nu_learning_rate, clipvalue=1.0)
 
   estimator = NeuralDice(
-      dataset.spec,
-      nu_network,
-      zeta_network,
-      nu_optimizer,
-      zeta_optimizer,
-      lam_optimizer,
-      gamma,
-      zero_reward=zero_reward,
-      f_exponent=f_exponent,
-      primal_form=primal_form,
-      reward_fn=reward_fn,
-      primal_regularizer=primal_regularizer,
-      dual_regularizer=dual_regularizer,
-      norm_regularizer=norm_regularizer,
-      nu_regularizer=nu_regularizer,
-      zeta_regularizer=zeta_regularizer)
+      dataset_spec        = dataset.spec,
+      nu_network          = nu_network,
+      zeta_network        = zeta_network,
+      nu_optimizer        = nu_optimizer,
+      zeta_optimizer      = zeta_optimizer,
+      lam_optimizer       = lam_optimizer,
+      gamma               = gamma,
+      zero_reward         = zero_reward,
+      f_exponent          = f_exponent,
+      primal_form         = primal_form,
+      reward_fn           = reward_fn,
+      primal_regularizer  = primal_regularizer,
+      dual_regularizer    = dual_regularizer,
+      norm_regularizer    = norm_regularizer,
+      nu_regularizer      = nu_regularizer,
+      zeta_regularizer    = zeta_regularizer
+  )
 
   global_step = tf.Variable(0, dtype=tf.int64)
   tf.summary.experimental.set_step(global_step)
 
-  # target_policy = get_target_policy(load_dir, env_name, tabular_obs)
-  target_policy = get_target_policy_from_torch(load_dir, env_name)
+  target_policy = get_target_policy_from_torch(policy_filepath, env_name)
   running_losses = []
   running_estimates = []
   for step in range(num_steps):
