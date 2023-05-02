@@ -14,6 +14,7 @@ ie. using default `continuous_projection_net` and ignoring the standard deviatio
 It is meant to replace the actor creationg part in `get_sac_policy()` in `dice_rl/environments/env_policies.py`.
 """
 
+import numpy as np
 import torch
 
 from tf_agents.networks.actor_distribution_network import ActorDistributionNetwork
@@ -24,7 +25,7 @@ class TorchActorNetwork(ActorDistributionNetwork):
     Enable load weights from a torch model.
     """
 
-    def load_torch_weights(self, torch_model_path: str) -> None:
+    def load_torch_weights(self, torch_model_path: str, is_pendulum: bool = False) -> None:
         """
         Load weights from a torch model.
 
@@ -46,8 +47,20 @@ class TorchActorNetwork(ActorDistributionNetwork):
         self._encoder.layers[2].set_weights([weight, bias])
 
         ## final dense layer
-        weight = torch_state_dict["net.4.weight"].numpy().T
-        bias = torch_state_dict["net.4.bias"].numpy()
-        self._projection_networks.layers[0].set_weights([weight, bias])
+        if is_pendulum:
+            weight = torch_state_dict["net.4.weight"].numpy().T
+            dummy_action_weight = np.random.randn(*weight.shape)
+            weight = np.concatenate((dummy_action_weight, weight), axis=1)
+            
+            bias = torch_state_dict["net.4.bias"].numpy()
+            dummy_action_bias = np.random.randn(*bias.shape)
+            bias = np.concatenate((dummy_action_bias, bias))
+            
+            self._projection_networks.layers[0].set_weights([weight, bias])
+
+        else:
+            weight = torch_state_dict["net.4.weight"].numpy().T
+            bias = torch_state_dict["net.4.bias"].numpy()
+            self._projection_networks.layers[0].set_weights([weight, bias])
 
         del torch_state_dict

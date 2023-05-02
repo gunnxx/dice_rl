@@ -8,7 +8,7 @@ import time
 
 MAX_JOB      = 2
 START_JOB_ID = 0
-NUM_QUEUE    = 20
+NUM_QUEUE    = 32
 NUM_GPU      = 4
 
 def kill_jobs():
@@ -48,16 +48,19 @@ job_id = START_JOB_ID
 
 ###############################################################################################################
 
-seed_list   = [i for i in range(5)]
+seed_list   = [i for i in range(8)]
 reg_list    = [
     (0., 1., 1, 0., 0, "DualDICE"),
     (1., 0., 1, 1., 1, "GenDICE"),
     (1., 0., 1, 1., 0, "GradientDICE"),
     (0., 1., 0, 1., 1, "BestDICE")
 ]
-env_name    = "maze2d-umaze-v0"
-buffer_path = "scripts/dataset/maze2d-umaze-v0/tf_buffer/medium_60000_rand0.2_bias0.0_std0.2"
-policy_path = "scripts/dataset/maze2d-umaze-v0/policies/expert/actor"
+# env_name    = "maze2d-umaze-v0"
+# buffer_path = "scripts/dataset/maze2d-umaze-v0/tf_buffer/medium_60000_rand0.2_bias0.0_std0.2"
+# policy_path = "scripts/dataset/maze2d-umaze-v0/policies/expert/actor"
+env_name    = "Pendulum-v1"
+buffer_path = "scripts/dataset/Pendulum-v1/tf_buffer/medium_500000_dummy1_rand0.20_bias0.00_std0.50"
+policy_path = "scripts/dataset/Pendulum-v1/policies/expert/actor"
 save_path   = "/ext_hdd/twguntara/kernel_ope"
 gamma       = 0.95
 

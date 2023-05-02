@@ -6,7 +6,6 @@ import argparse
 import d4rl
 import numpy as np
 import os.path
-import pickle
 import tensorflow as tf
 import torch
 import tqdm
@@ -71,21 +70,17 @@ if __name__ == "__main__":
     env_name  = load_path.split("/")[-3]
     save_path = os.path.join(args.save_path, filename[:-3])
 
-    # assert env_name in [
-    #     "Ant-v3",
-    #     "HalfCheetah-v3",
-    #     "Hopper-v3",
-    #     "Humanoid-v3",
-    #     "Walker2d-v3"
-    # ], "All these environments have maximum length of 1000."
-
     ## load our dataset
-    # with open(load_path, "rb") as f:
-    #     read_dataset : ReplayBuffer = pickle.load(f)
     read_dataset : ReplayBuffer = torch.load(load_path, map_location=torch.device("cpu"))
 
-    num_trajectory = read_dataset.start_size
-    max_trajectory_length = 150
+    ## see save_replay_buffer.py. it adds additional 1 `start_state` at the end.
+    num_trajectory = read_dataset.start_size - 1
+    if env_name.startswith("maze2d"):
+        max_trajectory_length = 150
+    elif env_name.startswith("Pendulum"):
+        max_trajectory_length = 200
+    else:
+        raise KeyError("env_name is not considered yet.")
 
     ## load environment to create spec
     ## NOTE: use `suite_mujoco` instead of `suite_gym` because it converts every `gym.spaces.Box` to `float32`
@@ -94,7 +89,18 @@ if __name__ == "__main__":
 
     ## create the environment spec
     observation_spec = env.observation_spec()
-    action_spec = env.action_spec()
+    if env_name.startswith("Pendulum"):
+        action_spec = specs.tensor_spec.from_spec(
+            specs.BoundedArraySpec(
+                shape   = (2,),
+                dtype   = np.float32,
+                minimum = np.array([-7, -2], dtype=np.float32),
+                maximum = np.array([7, 2], dtype=np.float32),
+                name    = "action"
+            )
+        )
+    else:
+        action_spec = env.action_spec()
     time_step_spec = time_step.time_step_spec(observation_spec)
     step_num_spec = specs.tensor_spec.from_spec(
         specs.BoundedArraySpec(

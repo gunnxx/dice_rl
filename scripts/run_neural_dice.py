@@ -21,9 +21,11 @@ from absl import flags
 
 import os
 import d4rl ## needed for maze2d envs
+import numpy as np
 import tensorflow as tf
 import wandb
 
+from tf_agents import specs
 from tf_agents.environments import suite_mujoco, tf_py_environment
 from tf_agents.policies.actor_policy import ActorPolicy
 
@@ -54,7 +56,7 @@ flags.DEFINE_float('nu_learning_rate', 0.0001, 'Learning rate for nu.')
 flags.DEFINE_float('zeta_learning_rate', 0.0001, 'Learning rate for zeta.')
 flags.DEFINE_float('nu_regularizer', 0.0, 'Ortho regularization on nu.')
 flags.DEFINE_float('zeta_regularizer', 0.0, 'Ortho regularization on zeta.')
-flags.DEFINE_integer('num_steps', 100000, 'Number of training steps.')
+flags.DEFINE_integer('num_steps', 500000, 'Number of training steps.')
 flags.DEFINE_integer('batch_size', 2048, 'Batch size.')
 
 flags.DEFINE_float('f_exponent', 2, 'Exponent for f function.')
@@ -86,22 +88,36 @@ def get_target_policy_from_torch(load_dir, env_name):
   env = suite_mujoco.load(env_name)
   env = tf_py_environment.TFPyEnvironment(env)
 
+  ## dummy action experiment
+  if env_name.startswith("Pendulum"):
+    action_spec = specs.tensor_spec.from_spec(
+      specs.BoundedArraySpec(
+        shape   = (2,),
+        dtype   = np.float32,
+        minimum = np.array([-7, -2], dtype=np.float32),
+        maximum = np.array([7, 2], dtype=np.float32),
+        name    = "action"
+      )
+    )
+  else:
+    action_spec = env.action_spec()
+
   actor_net = TorchActorNetwork(
     input_tensor_spec   = env.observation_spec(),
-    output_tensor_spec  = env.action_spec(),
+    output_tensor_spec  = action_spec,
     fc_layer_params     = (256, 256)
   )
 
   ## need to build actor_net first by constructing ActorPolicy
   policy = ActorPolicy(
     time_step_spec  = env.time_step_spec(),
-    action_spec     = env.action_spec(),
+    action_spec     = action_spec,
     actor_network   = actor_net,
     training        = False
   )
 
   ## policy keeps reference to actor_net, so it automatically updates
-  actor_net.load_torch_weights(load_dir)
+  actor_net.load_torch_weights(load_dir, is_pendulum=env_name.startswith("Pendulum"))
   return policy
 
 
@@ -171,7 +187,7 @@ def main(argv):
     group   = algo_name,
     dir     = save_dir,
     config  = wandb_config,
-    id      = "%s_%s_seed-%s_algo-%.3f" % (env_name, algo_name, seed, gamma)
+    id      = "%s_%s_seed-%s_algo-%.3f_" % (env_name, algo_name, seed, gamma)
   )
 
   def reward_fn(env_step):
@@ -263,7 +279,7 @@ def main(argv):
     losses = estimator.train_step(initial_steps_batch, transitions_batch,
                                   target_policy)
     running_losses.append(losses)
-    if step % 500 == 0 or step == num_steps - 1:
+    if step % 1000 == 0 or step == num_steps - 1:
       estimate = estimator.estimate_average_reward(dataset, target_policy, run)
       running_estimates.append(estimate)
       running_losses = []
