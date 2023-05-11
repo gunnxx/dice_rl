@@ -94,8 +94,8 @@ if __name__ == "__main__":
             specs.BoundedArraySpec(
                 shape   = (2,),
                 dtype   = np.float32,
-                minimum = np.array([-7, -2], dtype=np.float32),
-                maximum = np.array([7, 2], dtype=np.float32),
+                minimum = np.array([-2, -0], dtype=np.float32),
+                maximum = np.array([2, 0], dtype=np.float32),
                 name    = "action"
             )
         )

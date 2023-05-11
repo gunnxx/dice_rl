@@ -23,7 +23,7 @@ import os
 import d4rl ## needed for maze2d envs
 import numpy as np
 import tensorflow as tf
-import wandb
+# import wandb
 
 from tf_agents import specs
 from tf_agents.environments import suite_mujoco, tf_py_environment
@@ -79,6 +79,8 @@ flags.DEFINE_string(
     'One of [exp, cuberoot, None]')
 
 flags.DEFINE_string("algo_name", None, "Algorithm name.", required=True)
+# flags.DEFINE_string("wandb_project_name", "ope_baselines", "Wandb project name.", required=False)
+# flags.DEFINE_string("unique_id", "storm", "Unique identifier", required=False)
 
 
 def get_target_policy_from_torch(load_dir, env_name):
@@ -94,8 +96,8 @@ def get_target_policy_from_torch(load_dir, env_name):
       specs.BoundedArraySpec(
         shape   = (2,),
         dtype   = np.float32,
-        minimum = np.array([-7, -2], dtype=np.float32),
-        maximum = np.array([7, 2], dtype=np.float32),
+        minimum = np.array([-2, -0], dtype=np.float32),
+        maximum = np.array([2, 0], dtype=np.float32),
         name    = "action"
       )
     )
@@ -153,42 +155,45 @@ def main(argv):
   shift_reward = FLAGS.shift_reward
   transform_reward = FLAGS.transform_reward
 
+  # wandb_project_name = FLAGS.wandb_project_name
+  # unique_id = FLAGS.unique_id
+
   ## seeding
   tf.random.set_seed(seed)
 
   ## wandb config
-  os.environ["WANDB_API_KEY"] = "347cf7dc2e58b4eed9a6211c618daff1ba02cdfa"
+  # os.environ["WANDB_API_KEY"] = "347cf7dc2e58b4eed9a6211c618daff1ba02cdfa"
 
-  wandb_config = {
-    "seed": seed,
-    "env_name": env_name,
-    "gamma": gamma,
-    "nu_learning_rate": nu_learning_rate,
-    "zeta_learning_rate": zeta_learning_rate,
-    "nu_regularizer": nu_regularizer,
-    "zeta_regularizer": zeta_regularizer,
-    "num_steps": num_steps,
-    "batch_size": batch_size,
-    "f_exponent": f_exponent,
-    "primal_form": primal_form,
-    "primal_regularizer": primal_regularizer,
-    "dual_regularizer": dual_regularizer,
-    "zero_reward": zero_reward,
-    "norm_regularizer": norm_regularizer,
-    "zeta_pos": zeta_pos,
-    "scale_reward": scale_reward,
-    "shift_reward": shift_reward,
-    "transform_reward": transform_reward
-  }
-  run = wandb.init(
-    mode    = "online",
-    entity  = "kernel_metric",
-    project = "ope_baselines",
-    group   = algo_name,
-    dir     = save_dir,
-    config  = wandb_config,
-    id      = "%s_%s_seed-%s_algo-%.3f_" % (env_name, algo_name, seed, gamma)
-  )
+  # wandb_config = {
+  #   "seed": seed,
+  #   "env_name": env_name,
+  #   "gamma": gamma,
+  #   "nu_learning_rate": nu_learning_rate,
+  #   "zeta_learning_rate": zeta_learning_rate,
+  #   "nu_regularizer": nu_regularizer,
+  #   "zeta_regularizer": zeta_regularizer,
+  #   "num_steps": num_steps,
+  #   "batch_size": batch_size,
+  #   "f_exponent": f_exponent,
+  #   "primal_form": primal_form,
+  #   "primal_regularizer": primal_regularizer,
+  #   "dual_regularizer": dual_regularizer,
+  #   "zero_reward": zero_reward,
+  #   "norm_regularizer": norm_regularizer,
+  #   "zeta_pos": zeta_pos,
+  #   "scale_reward": scale_reward,
+  #   "shift_reward": shift_reward,
+  #   "transform_reward": transform_reward,
+  #   "unique_id": unique_id
+  # }
+  # run = wandb.init(
+  #   mode    = "online",
+  #   entity  = "kernel_metric",
+  #   project = wandb_project_name,
+  #   group   = algo_name,
+  #   dir     = save_dir,
+  #   config  = wandb_config
+  # )
 
   def reward_fn(env_step):
     reward = env_step.reward * scale_reward + shift_reward
@@ -280,7 +285,7 @@ def main(argv):
                                   target_policy)
     running_losses.append(losses)
     if step % 1000 == 0 or step == num_steps - 1:
-      estimate = estimator.estimate_average_reward(dataset, target_policy, run)
+      estimate = estimator.estimate_average_reward(dataset, target_policy, None)# run)
       running_estimates.append(estimate)
       running_losses = []
     global_step.assign_add(1)

@@ -345,16 +345,16 @@ class NeuralDice(object):
              self._dual_regularizer * f_zeta, 'lagrangian =', lagrangian,
              'overall =', overall)
 
-    wandb_run.log({
-      "nu_zero": nu_zero,
-      "lam": self._norm_regularizer * self._lam,
-      "dual_step": dual_step,
-      "constraint": constraint,
-      "nu_reg": self._primal_regularizer * f_nu,
-      "zeta_reg": self._dual_regularizer * f_zeta,
-      "lagrangian": lagrangian,
-      "overall": overall
-    })
+    # wandb_run.log({
+    #   "nu_zero": nu_zero,
+    #   "lam": self._norm_regularizer * self._lam,
+    #   "dual_step": dual_step,
+    #   "constraint": constraint,
+    #   "nu_reg": self._primal_regularizer * f_nu,
+    #   "zeta_reg": self._dual_regularizer * f_zeta,
+    #   "lagrangian": lagrangian,
+    #   "overall": overall
+    # })
 
     return dual_step
 

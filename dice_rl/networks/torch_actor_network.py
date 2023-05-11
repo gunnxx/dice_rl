@@ -49,12 +49,12 @@ class TorchActorNetwork(ActorDistributionNetwork):
         ## final dense layer
         if is_pendulum:
             weight = torch_state_dict["net.4.weight"].numpy().T
-            dummy_action_weight = np.random.randn(*weight.shape)
-            weight = np.concatenate((dummy_action_weight, weight), axis=1)
+            dummy_action_weight = np.random.randn(*weight.shape) * 0
+            weight = np.concatenate((weight, dummy_action_weight), axis=1)
             
             bias = torch_state_dict["net.4.bias"].numpy()
-            dummy_action_bias = np.random.randn(*bias.shape)
-            bias = np.concatenate((dummy_action_bias, bias))
+            dummy_action_bias = np.random.randn(*bias.shape) * 0
+            bias = np.concatenate((bias, dummy_action_bias))
             
             self._projection_networks.layers[0].set_weights([weight, bias])
 
