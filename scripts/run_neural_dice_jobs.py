@@ -6,9 +6,9 @@ import subprocess
 import sys
 import time
 
-MAX_JOB      = 2
+MAX_JOB      = 4
 START_JOB_ID = 0
-NUM_QUEUE    = 32
+NUM_QUEUE    = 8
 NUM_GPU      = 4
 
 def kill_jobs():
@@ -50,9 +50,9 @@ job_id = START_JOB_ID
 
 seed_list   = [i for i in range(8)]
 reg_list    = [
-    (0., 1., 1, 0., 0, "DualDICE"),
-    (1., 0., 1, 1., 1, "GenDICE"),
-    (1., 0., 1, 1., 0, "GradientDICE"),
+    # (0., 1., 1, 0., 0, "DualDICE"),
+    # (1., 0., 1, 1., 1, "GenDICE"),
+    # (1., 0., 1, 1., 0, "GradientDICE"),
     (0., 1., 0, 1., 1, "BestDICE")
 ]
 # env_name    = "maze2d-umaze-v0"
@@ -114,6 +114,8 @@ while True:
     cmd += " --zeta_pos=%d" % zeta_pos
     cmd += " --algo_name=%s" % algo_name
     cmd += " --gamma %f" % gamma
+    cmd += " --num_steps 2000000"
+    cmd += " --batch_size 1024"
 
     ###############################################################################################################
 
