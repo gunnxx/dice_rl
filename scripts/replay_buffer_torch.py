@@ -2,7 +2,9 @@ from typing import Dict
 
 import numpy as np
 import torch
-
+import os
+import joblib
+# from sklearn import preprocessing
 from utils import TorchStandardScaler
 
 
@@ -39,13 +41,13 @@ class ReplayBuffer:
         self.start_size = 0
 
         ## main content of the buffer
-        self.state = np.zeros((max_size, state_dim), dtype=np.float32)
-        self.action = np.zeros((max_size, action_dim), dtype=np.float32)
-        self.next_state = np.zeros((max_size, state_dim), dtype=np.float32)
-        self.next_action = np.zeros((max_size, action_dim), dtype=np.float32)
-        self.reward = np.zeros((max_size, 1), dtype=np.float32)
-        self.not_done = np.zeros((max_size, 1), dtype=np.float32)
-        self.start_state = np.zeros((max_size, state_dim), dtype=np.float32)
+        self.state = torch.zeros((max_size, state_dim), device=self.device)
+        self.action = torch.zeros((max_size, action_dim), device=self.device)
+        self.next_state = torch.zeros((max_size, state_dim), device=self.device)
+        self.next_action = torch.zeros((max_size, action_dim), device=self.device)
+        self.reward = torch.zeros((max_size, 1), device=self.device)
+        self.not_done = torch.zeros((max_size, 1), device=self.device)
+        self.start_state = torch.zeros((max_size, state_dim), device=self.device)
         self.state_scaler = None
 
         
@@ -56,7 +58,7 @@ class ReplayBuffer:
         next_state: np.ndarray,
         next_action: np.ndarray,
         reward: float,
-        done: bool) -> None:
+        done: float) -> None:
         """
         Add transition to the transition buffer.
 
@@ -66,10 +68,10 @@ class ReplayBuffer:
         :param reward: Reward.
         :param done: Done signal.
         """
-        self.state[self.ptr] = state
-        self.action[self.ptr] = action
-        self.next_state[self.ptr] = next_state
-        self.next_action[self.ptr] = next_action
+        self.state[self.ptr] = torch.tensor(state, device=self.device)
+        self.action[self.ptr] = torch.tensor(action, device=self.device)
+        self.next_state[self.ptr] = torch.tensor(next_state, device=self.device)
+        self.next_action[self.ptr] = torch.tensor(next_action, device=self.device)
         self.reward[self.ptr] = reward
         self.not_done[self.ptr] = 1. - done
 
@@ -83,7 +85,7 @@ class ReplayBuffer:
 
         :param state: Starting state array of shape (state_dim).
         """
-        self.start_state[self.start_ptr] = state
+        self.start_state[self.start_ptr] = torch.tensor(state, device=self.device)
 
         self.start_ptr = (self.start_ptr + 1) % self.max_size
         self.start_size = min(self.start_size + 1, self.max_size)
@@ -103,20 +105,23 @@ class ReplayBuffer:
             idx = np.arange(self.start_size)
         else:
             idx = np.random.randint(self.start_size, size=batch_size)
+            # idx = torch.randint(self.start_size, size=(batch_size,))
 
         if not scaled:
-            return torch.tensor(self.start_state[idx], device=self.device)
+            # return torch.tensor(self.start_state[idx], device=self.device)
+            return self.start_state[idx]
         else:
             assert self.state_scaler != None
-            scaled_start_state =  self.state_scaler.transform(torch.tensor(self.start_state[idx], device=self.device))
+            scaled_start_state =  self.state_scaler.transform(self.start_state[idx])
             return scaled_start_state
 
-    def sample(self, batch_size: int, scaled:bool = False, resample_idx=None) -> Dict[str, torch.Tensor]:
+    def sample(self, batch_size: int, scaled:bool = False, resample_idx:torch.tensor =None) -> Dict[str, torch.Tensor]:
         """
         Sample transitions from the transition buffer.
 
         :param batch_size: Batch size.
         :param scaled: True to get normalized data (but the actions are not scaled)
+        :param resample_idx: get the values by idx sampled with resampling
 
         Return:
             Dictionary with the following keys and values:
@@ -134,26 +139,26 @@ class ReplayBuffer:
 
         if not scaled:
             return {
-                "state":  torch.tensor(self.state[idx], device=self.device),
-                "action": torch.tensor(self.action[idx], device=self.device),
-                "next_state": torch.tensor(self.next_state[idx], device=self.device),
-                "next_action": torch.tensor(self.next_action[idx], device=self.device),
-                "reward":   torch.tensor(self.reward[idx], device=self.device),
-                "not_done": torch.tensor(self.not_done[idx], device=self.device)
+                "state":  self.state[idx],
+                "action": self.action[idx],
+                "next_state": self.next_state[idx],
+                "next_action": self.next_action[idx],
+                "reward":   self.reward[idx],
+                "not_done": self.not_done[idx]
             }
 
         else:
             assert self.state_scaler != None
-            scaled_state      = self.state_scaler.transform(torch.tensor(self.state[idx], device=self.device))
-            scaled_next_state = self.state_scaler.transform(torch.tensor(self.next_state[idx], device=self.device))
+            scaled_state      = self.state_scaler.transform(self.state[idx])
+            scaled_next_state = self.state_scaler.transform(self.next_state[idx])
 
             return {
                 "state":      scaled_state,
-                "action":     torch.tensor(self.action[idx], device=self.device),
+                "action":     self.action[idx],
                 "next_state": scaled_next_state,
-                "next_action": torch.tensor(self.next_action[idx], device=self.device),
-                "reward":     torch.tensor(self.reward[idx], device=self.device),
-                "not_done":   torch.tensor(self.not_done[idx], device=self.device)
+                "next_action": self.next_action[idx],
+                "reward":     self.reward[idx],
+                "not_done":   self.not_done[idx]
             }
 
 
@@ -164,7 +169,7 @@ class ReplayBuffer:
         """
         # Use TorchStandardScalers
         self.state_scaler  = TorchStandardScaler()
-        self.state_scaler.fit( torch.tensor(self.state[:self.size], device=self.device))
+        self.state_scaler.fit( self.state[:self.size])
 
 
     def get_scalers(self,):
@@ -183,24 +188,24 @@ class ReplayBuffer:
     def get_all_data(self, scaled:bool) -> Dict[str, torch.Tensor]:
         if not scaled:
             return {
-                "state":  torch.tensor(self.state[:self.size], device=self.device),
-                "action": torch.tensor(self.action[:self.size], device=self.device),
-                "next_state": torch.tensor(self.next_state[:self.size], device=self.device),
-                "next_action": torch.tensor(self.next_action[:self.size], device=self.device),
-                "reward":   torch.tensor(self.reward[:self.size], device=self.device),
-                "not_done": torch.tensor(self.not_done[:self.size], device=self.device)
+                "state":  self.state[:self.size],
+                "action": self.action[:self.size],
+                "next_state": self.next_state[:self.size],
+                "next_action": self.next_action[:self.size],
+                "reward":   self.reward[:self.size],
+                "not_done": self.not_done[:self.size]
             }
 
         else:
             assert self.state_scaler != None
-            scaled_state      = self.state_scaler.transform(torch.tensor(self.state[:self.size], device=self.device))
-            scaled_next_state = self.state_scaler.transform(torch.tensor(self.next_state[:self.size], device=self.device))
+            scaled_state      = self.state_scaler.transform(self.state[:self.size])
+            scaled_next_state = self.state_scaler.transform(self.next_state[:self.size])
 
             return {
                 "state": scaled_state,
-                "action": torch.tensor(self.action[:self.size], device=self.device),
+                "action": self.action[:self.size],
                 "next_state": scaled_next_state,
-                "next_action": torch.tensor(self.next_action[:self.size], device=self.device),
-                "reward":   torch.tensor(self.reward[:self.size], device=self.device),
-                "not_done": torch.tensor(self.not_done[:self.size], device=self.device)
+                "next_action": self.next_action[:self.size],
+                "reward":   self.reward[:self.size],
+                "not_done": self.not_done[:self.size]
             }

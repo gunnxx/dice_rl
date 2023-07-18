@@ -20,7 +20,7 @@ from dice_rl.data.tf_offpolicy_dataset import TFOffpolicyDataset
 from dice_rl.estimators.estimator import get_fullbatch_average
 
 ## must be here because of the pickle stuff
-from replay_buffer import ReplayBuffer
+from replay_buffer_torch import ReplayBuffer
 
 
 def add_episodes_to_dataset(episodes, valid_ids, write_dataset):
@@ -67,18 +67,20 @@ if __name__ == "__main__":
     ## TODO
     load_path = args.load_path
     filename  = load_path.split("/")[-1]
-    env_name  = load_path.split("/")[-3]
+    env_name  = load_path.split("/")[-2]
     save_path = os.path.join(args.save_path, filename[:-3])
 
     ## load our dataset
     read_dataset : ReplayBuffer = torch.load(load_path, map_location=torch.device("cpu"))
 
-    ## see save_replay_buffer.py. it adds additional 1 `start_state` at the end.
-    num_trajectory = read_dataset.start_size - 1
+    ## start_size serves as an upper-bound of the number of trajectories
+    num_trajectory = read_dataset.start_size
     if env_name.startswith("maze2d"):
         max_trajectory_length = 150
     elif env_name.startswith("Pendulum"):
         max_trajectory_length = 200
+    elif env_name.startswith("HalfCheetah") or env_name.startswith("Walker2d") or env_name.startswith("Hopper"):
+        max_trajectory_length = 1000
     else:
         raise KeyError("env_name is not considered yet.")
 
@@ -87,8 +89,22 @@ if __name__ == "__main__":
     env = suite_mujoco.load(env_name)
     env = tf_py_environment.TFPyEnvironment(env)
 
-    ## create the environment spec
+    ## create observation spec
+    ## add absorbing states
     observation_spec = env.observation_spec()
+    if env_name.startswith("HalfCheetah") or env_name.startswith("Walker2d") or env_name.startswith("Hopper"):
+        observation_spec = specs.tensor_spec.from_spec(
+            specs.BoundedArraySpec(
+                shape   = (observation_spec.shape[0] + 1,),
+                dtype   = np.float32,
+                minimum = observation_spec.minimum,
+                maximum = observation_spec.maximum,
+                name    = observation_spec.name
+            )
+        )
+
+    ## create action spec
+    ## dummy action dimension for pendulum
     if env_name.startswith("Pendulum"):
         action_spec = specs.tensor_spec.from_spec(
             specs.BoundedArraySpec(
@@ -101,6 +117,8 @@ if __name__ == "__main__":
         )
     else:
         action_spec = env.action_spec()
+
+    ## create the environment spec
     time_step_spec = time_step.time_step_spec(observation_spec)
     step_num_spec = specs.tensor_spec.from_spec(
         specs.BoundedArraySpec(
@@ -127,7 +145,7 @@ if __name__ == "__main__":
     ## prepare the tf dataset
     write_dataset = TFOffpolicyDataset(
         spec     = write_dataset_spec,
-        capacity = num_trajectory * (max_trajectory_length + 1)
+        capacity = num_trajectory * (max_trajectory_length + 2)
     )
 
     ## "container" initialization
@@ -148,7 +166,12 @@ if __name__ == "__main__":
         reward = read_dataset.reward[i][0]
         not_done = read_dataset.not_done[i]
 
+        if env_name.startswith("HalfCheetah") or env_name.startswith("Walker2d") or env_name.startswith("Hopper"):
+            state = torch.cat((state, torch.tensor([0.])))
+
         ## convert to `EnvStep`
+        ## using dicount of 1 because NeuralDICE use other parameters for the discount factor
+        ## see `neural_dice.py` Line 193
         step = EnvStep(
             step_type   = step_type,
             step_num    = tf.cast(t, tf.int64),
@@ -170,19 +193,51 @@ if __name__ == "__main__":
         if not not_done or \
            t == max_trajectory_length or \
            i == (read_dataset.size - 1):
-            ## add the terminal state
-            step = EnvStep(
-                step_type   = time_step.StepType.LAST,
-                step_num    = tf.cast(t, tf.int64),
-                observation = tf.cast(next_state, tf.float32),
-                action      = tf.cast(action, tf.float32),
-                reward      = tf.cast(reward, tf.float32),
-                discount    = tf.cast(1, tf.float32),
-                policy_info = (), ## NOTE: just check the notebook
-                env_info    = {},
-                other_info  = {}
-            )
-            episode.append(step)
+            ## use absorbing state
+            if env_name.startswith("HalfCheetah") or env_name.startswith("Walker2d") or env_name.startswith("Hopper"):
+                next_state = torch.cat((next_state, torch.tensor([0.])))
+                step = EnvStep(
+                    step_type   = time_step.StepType.MID,
+                    step_num    = tf.cast(t, tf.int64),
+                    observation = tf.cast(next_state, tf.float32),
+                    action      = tf.cast(action, tf.float32),
+                    reward      = tf.cast(0., tf.float32),
+                    discount    = tf.cast(1, tf.float32),
+                    policy_info = (), ## NOTE: just check the notebook
+                    env_info    = {},
+                    other_info  = {}
+                )
+                episode.append(step)
+
+                absorbing_state = torch.zeros_like(next_state)
+                absorbing_state[-1] = 1.
+                step = EnvStep(
+                    step_type   = time_step.StepType.LAST,
+                    step_num    = tf.cast(t, tf.int64),
+                    observation = tf.cast(absorbing_state, tf.float32),
+                    action      = tf.cast(action, tf.float32),  ## will be ignored because StepType.LAST
+                    reward      = tf.cast(0., tf.float32),      ## will be ignored because StepType.LAST
+                    discount    = tf.cast(1, tf.float32),
+                    policy_info = (), ## NOTE: just check the notebook
+                    env_info    = {},
+                    other_info  = {}
+                )
+                episode.append(step)
+            
+            ## do not use absorbing state
+            else:
+                step = EnvStep(
+                    step_type   = time_step.StepType.LAST,
+                    step_num    = tf.cast(t, tf.int64),
+                    observation = tf.cast(next_state, tf.float32),
+                    action      = tf.cast(action, tf.float32),  ## will be ignored because StepType.LAST
+                    reward      = tf.cast(reward, tf.float32),  ## will be ignored because StepType.LAST
+                    discount    = tf.cast(1, tf.float32),
+                    policy_info = (), ## NOTE: just check the notebook
+                    env_info    = {},
+                    other_info  = {}
+                )
+                episode.append(step)
 
             ## update "container"
             episodes.append(episode)
@@ -199,9 +254,10 @@ if __name__ == "__main__":
         pad_length = max_length - len(episode)
         episode.extend([episode[-1]] * pad_length)
     
-    assert len(episode_lengths) == read_dataset.start_size - 1, "Num episodes do not match."
-    assert max_length == (max_trajectory_length + 1), "We save (s, a, r) and accounts for terminal state."
-    assert sum(episode_lengths) == read_dataset.size + read_dataset.start_size - 1, "Account for terminal state."
+    ## this check only valids when there is no terminal condition
+    # assert len(episode_lengths) == read_dataset.start_size - 1, "Num episodes do not match."
+    # assert max_length == (max_trajectory_length + 1), "We save (s, a, r) and accounts for terminal state."
+    # assert sum(episode_lengths) == read_dataset.size + read_dataset.start_size - 1, "Account for terminal state."
     
     batched_episodes = nest_utils.stack_nested_tensors(
        [nest_utils.stack_nested_tensors(episode) for episode in episodes]
