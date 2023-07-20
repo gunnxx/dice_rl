@@ -140,7 +140,9 @@ class NeuralDice(object):
 
   def _get_average_value(self, network, env_step, policy):
     if self._solve_for_state_action_ratio:
-      tfagents_step = dataset_lib.convert_to_tfagents_timestep(env_step)
+      ## NOTE: this is because we add the indicator for absorbing state
+      tfagents_step = env_step.write(observation=env_step.observation[:, :-1])
+      tfagents_step = dataset_lib.convert_to_tfagents_timestep(tfagents_step)
       if self._categorical_action and self._num_samples is None:
         action_weights = policy.distribution(
             tfagents_step).action.probs_parameter()
@@ -193,7 +195,9 @@ class NeuralDice(object):
     discounts = self._gamma * next_env_step.discount
     policy_ratio = 1.0
     if not self._solve_for_state_action_ratio:
-      tfagents_step = dataset_lib.convert_to_tfagents_timestep(env_step)
+      ## NOTE: this is because we add the indicator for absorbing state
+      tfagents_step = env_step.write(observation=env_step.observation[:, :-1])
+      tfagents_step = dataset_lib.convert_to_tfagents_timestep(tfagents_step)
       policy_log_probabilities = policy.distribution(
           tfagents_step).action.log_prob(env_step.action)
       policy_ratio = tf.exp(policy_log_probabilities -
