@@ -4,6 +4,7 @@ Convert our custom `ReplayBuffer` to `TFOffpolicyDataset`.
 
 import argparse
 import d4rl
+import gym
 import numpy as np
 import os.path
 import tensorflow as tf
@@ -21,6 +22,7 @@ from dice_rl.estimators.estimator import get_fullbatch_average
 
 ## must be here because of the pickle stuff
 from replay_buffer_torch import ReplayBuffer
+from TD3 import TD3
 
 
 def add_episodes_to_dataset(episodes, valid_ids, write_dataset):
@@ -56,8 +58,9 @@ def get_args() -> argparse.Namespace:
         Parsed arguments.
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--load_path", type=str)
-    parser.add_argument("--save_path", type=str)
+    parser.add_argument("--load_buffer_path", type=str)
+    parser.add_argument("--save_buffer_path", type=str)
+    parser.add_argument("--load_policy_path", type=str)
     return parser.parse_args()
 
 
@@ -65,13 +68,27 @@ if __name__ == "__main__":
     args = get_args()
 
     ## TODO
-    load_path = args.load_path
+    load_path = args.load_buffer_path
     filename  = load_path.split("/")[-1]
     env_name  = load_path.split("/")[-2]
-    save_path = os.path.join(args.save_path, filename[:-3])
+    save_path = os.path.join(args.save_buffer_path, filename[:-3])
+
+    ## we add absorbing state in this implementation
+    assert env_name.startswith("HalfCheetah") or env_name.startswith("Walker2d") or env_name.startswith("Hopper"), "Only for this for now."
 
     ## load our dataset
     read_dataset : ReplayBuffer = torch.load(load_path, map_location=torch.device("cpu"))
+
+    ## load our behavior policy to add transition to absorbing state
+    env = gym.make(env_name)
+    policy = TD3(
+        state_dim   = env.observation_space.shape[0],
+        action_dim  = env.action_space.shape[0],
+        max_action  = float(env.action_space.high[0]),
+        device      = "cpu"
+    )
+    policy.load(args.load_policy_path)
+    del env
 
     ## start_size serves as an upper-bound of the number of trajectories
     num_trajectory = read_dataset.start_size
@@ -189,55 +206,85 @@ if __name__ == "__main__":
         t += 1
         step_type = time_step.StepType.MID
 
-        ## terminal state or maximum length or end of buffer
-        if not not_done or \
-           t == max_trajectory_length or \
-           i == (read_dataset.size - 1):
-            ## use absorbing state
-            if env_name.startswith("HalfCheetah") or env_name.startswith("Walker2d") or env_name.startswith("Hopper"):
-                next_state = torch.cat((next_state, torch.tensor([0.])))
-                step = EnvStep(
-                    step_type   = time_step.StepType.MID,
-                    step_num    = tf.cast(t, tf.int64),
-                    observation = tf.cast(next_state, tf.float32),
-                    action      = tf.cast(action, tf.float32),
-                    reward      = tf.cast(0., tf.float32),
-                    discount    = tf.cast(1, tf.float32),
-                    policy_info = (), ## NOTE: just check the notebook
-                    env_info    = {},
-                    other_info  = {}
-                )
-                episode.append(step)
+        ## terminal, add transition from terminal state to absorbing state
+        ## and (self) transition from absorbing state to absorbing state
+        if not not_done:
+            ## get action at the terminal state from behavior policy
+            ## NOTE: this is hard-coded for standard deviation of 0.3
+            with torch.no_grad(): next_action = policy.actor.forward(next_state)
+            next_action = next_action + torch.randn_like(next_action) * 0.3
 
-                absorbing_state = torch.zeros_like(next_state)
-                absorbing_state[-1] = 1.
-                step = EnvStep(
-                    step_type   = time_step.StepType.LAST,
-                    step_num    = tf.cast(t, tf.int64),
-                    observation = tf.cast(absorbing_state, tf.float32),
-                    action      = tf.cast(action, tf.float32),  ## will be ignored because StepType.LAST
-                    reward      = tf.cast(0., tf.float32),      ## will be ignored because StepType.LAST
-                    discount    = tf.cast(1, tf.float32),
-                    policy_info = (), ## NOTE: just check the notebook
-                    env_info    = {},
-                    other_info  = {}
-                )
-                episode.append(step)
-            
-            ## do not use absorbing state
-            else:
-                step = EnvStep(
-                    step_type   = time_step.StepType.LAST,
-                    step_num    = tf.cast(t, tf.int64),
-                    observation = tf.cast(next_state, tf.float32),
-                    action      = tf.cast(action, tf.float32),  ## will be ignored because StepType.LAST
-                    reward      = tf.cast(reward, tf.float32),  ## will be ignored because StepType.LAST
-                    discount    = tf.cast(1, tf.float32),
-                    policy_info = (), ## NOTE: just check the notebook
-                    env_info    = {},
-                    other_info  = {}
-                )
-                episode.append(step)
+            next_state = torch.cat((next_state, torch.tensor([0.])))
+            step = EnvStep(
+                step_type   = time_step.StepType.MID,
+                step_num    = tf.cast(t, tf.int64),
+                observation = tf.cast(next_state, tf.float32),
+                action      = tf.cast(next_action, tf.float32),
+                reward      = tf.cast(0., tf.float32),
+                discount    = tf.cast(1, tf.float32),
+                policy_info = (), ## NOTE: just check the notebook
+                env_info    = {},
+                other_info  = {}
+            )
+            episode.append(step)
+
+            absorbing_state = torch.zeros_like(next_state)
+            absorbing_state[-1] = 1.
+            step = EnvStep(
+                step_type   = time_step.StepType.MID,
+                step_num    = tf.cast(t, tf.int64),
+                observation = tf.cast(absorbing_state, tf.float32),
+                action      = tf.cast(next_action, tf.float32),
+                reward      = tf.cast(0., tf.float32),
+                discount    = tf.cast(1, tf.float32),
+                policy_info = (), ## NOTE: just check the notebook
+                env_info    = {},
+                other_info  = {}
+            )
+            episode.append(step)
+
+            step = EnvStep(
+                step_type   = time_step.StepType.LAST,
+                step_num    = tf.cast(t, tf.int64),
+                observation = tf.cast(absorbing_state, tf.float32),
+                action      = tf.cast(next_action, tf.float32), ## will be ignored because StepType.LAST
+                reward      = tf.cast(0., tf.float32),          ## will be ignored because StepType.LAST
+                discount    = tf.cast(1, tf.float32),
+                policy_info = (), ## NOTE: just check the notebook
+                env_info    = {},
+                other_info  = {}
+            )
+            episode.append(step)
+
+            ## update "container"
+            episodes.append(episode)
+            episode_lengths.append(len(episode))
+            episode = []
+
+            ## reset timestep
+            t = 0
+            step_type = time_step.StepType.FIRST
+        
+        ## timeout, no need to add absorbing state
+        elif t == max_trajectory_length or i == (read_dataset.size - 1):
+            ## get action at the terminal state from behavior policy
+            ## NOTE: this is hard-coded for standard deviation of 0.3
+            with torch.no_grad(): next_action = policy.actor.forward(next_state)
+            next_action = next_action + torch.randn_like(next_action) * 0.3
+
+            next_state = torch.cat((next_state, torch.tensor([0.])))
+            step = EnvStep(
+                step_type   = time_step.StepType.LAST,
+                step_num    = tf.cast(t, tf.int64),
+                observation = tf.cast(next_state, tf.float32),
+                action      = tf.cast(next_action, tf.float32), ## will be ignored because StepType.LAST
+                reward      = tf.cast(0., tf.float32),          ## will be ignored because StepType.LAST
+                discount    = tf.cast(1, tf.float32),
+                policy_info = (), ## NOTE: just check the notebook
+                env_info    = {},
+                other_info  = {}
+            )
+            episode.append(step)
 
             ## update "container"
             episodes.append(episode)
